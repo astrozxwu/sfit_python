@@ -19,6 +19,10 @@ t0par = fitconfig["t0par"]
 getavec = plx_config(t0par, RA, Dec)
 interactive = fitconfig["interactive"]
 verbose = fitconfig["verbose"]
+if "out_prefix" in fitconfig.keys():
+    prefix = fitconfig["out_prefix"]
+else:
+    prefix = ""
 
 parameters = ["t0", "u0", "tE", "rhos", "piEN", "piEE"]
 parameters_to_fit = fitconfig["parameters"]["to_fit"]
@@ -160,7 +164,7 @@ def generate_lc(param, ref=0):
         mask = np.full(fl.shape, False)
         mask[fitconfig["phot"][nob]["bad"]] = True
 
-        np.savetxt(os.path.join(outdir, f"fort.{37+nob}"), output[~mask], fmt="%12.4f %8.3f %8.3f %8.3f %8.3f")
+        np.savetxt(os.path.join(outdir, prefix + f"fort.{37+nob}"), output[~mask], fmt="%12.4f %8.3f %8.3f %8.3f %8.3f")
 
         chi2list = (fl - amp_fs * fs - fb) ** 2 / ferr**2
         mask = gbad(_flux, chi2list)
@@ -190,19 +194,35 @@ def generate_lc(param, ref=0):
     amp_fs = amp * b0
     f_model = amp_fs * fs_ref + fb_ref
     output = np.array([t, flux2mag([f_model]), amp_fs]).T
-    np.savetxt(os.path.join(outdir, "fort.35"), output, fmt="%12.4f %8.4f %8.4f")
+    np.savetxt(os.path.join(outdir, prefix + "fort.35"), output, fmt="%12.4f %8.4f %8.4f")
 
     return masks
 
 
 if __name__ == "__main__":
-    param_lens = {**parameters_fixed, **parameters_to_fit}
-    param_lens = [param_lens[i] for i in parameters]
-    param_phot = [1.0, 0] * nobs
-    for i in range(nobs):
-        param_phot[2 * i] = fitconfig["parameters"]["fs"][i]
-        param_phot[2 * i + 1] = fitconfig["parameters"]["fb"][i]
-    param = param_lens + param_phot
+    use_old = True
+    if "init_par" in fitconfig.keys() and os.path.isfile(fitconfig["init_par"]):
+        param = np.loadtxt(fitconfig["init_par"])
+        if np.isnan(param).any():
+            use_old = False
+        if len(param) < nparam:
+            param_phot = [1.0, 0] * nobs
+            for i in range(nobs):
+                param_phot[2 * i] = fitconfig["parameters"]["fs"][i]
+                param_phot[2 * i + 1] = fitconfig["parameters"]["fb"][i]
+            param = np.append(param[:8], param_phot)
+        param = param[:nparam]
+    else:
+        use_old = False
+    if not use_old:
+        param_lens = {**parameters_fixed, **parameters_to_fit}
+        param_lens = [param_lens[i] for i in parameters]
+        param_phot = [1.0, 0] * nobs
+        for i in range(nobs):
+            param_phot[2 * i] = fitconfig["parameters"]["fs"][i]
+            param_phot[2 * i + 1] = fitconfig["parameters"]["fb"][i]
+        param = param_lens + param_phot
+    param_init = param.copy()
     if interactive:
         a = float(input())
         step_size = 0.1
@@ -223,15 +243,20 @@ if __name__ == "__main__":
     else:
         step_size = fitconfig["step_size"]
         n_step = fitconfig["n_step"]
+        bl0 = False
         for _step_size, _n_step in zip(step_size, n_step):
             for i in range(_n_step):
                 param, chi2, _, _ = next_step(param, _step_size)
     param_dict = dict(zip(parameters, param[: len(parameters)]))
     if verbose:
-        param, chi2, _, b = next_step(param, 0.0001)
+        param, chi2, _, b = next_step(param, 1e-10)
         ref = 0
         generate_lc(param, ref=0)
-        np.savetxt(os.path.join(outdir, "best.par"), param[:8], fmt="%10.4f")
+        outparam = param.copy()
+        # outparam[6] = flux2mag([param[6]])
+        # outparam[7] = flux2mag([param[6] + param[7]])
+        outparam = np.append(outparam, chi2)
+        np.savetxt(os.path.join(outdir, prefix + "best.par"), outparam, fmt="%10.4f")
         err = np.linalg.inv(b)
         print()
         print(u'\u2500' * 10 * nparam)
